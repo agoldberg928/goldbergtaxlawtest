@@ -1,0 +1,46 @@
+{
+  "name": "analyze-bank-documents.dev",
+  "version": "1.0.0",
+  "main": "/src/index.js",
+  "scripts": {
+    "start": "react-scripts start",
+    "build": "react-scripts build",
+    "test": "react-scripts test --env=jsdom",
+    "eject": "react-scripts eject"
+  },
+  "dependencies": {
+    "react": "^18.0.0",
+    "react-dom": "^18.0.0",
+    "react-scripts": "^5.0.0",
+    "react-router-dom": "^6.26.2",
+    "@types/react": "^18.3.9",
+    "@types/react-dom": "^18.3.0",
+    "@mui/x-data-grid": "^7.18.0",
+    "@mui/material": "^6.1.1",
+    "@mui/lab": "^6.0.0-beta.10",
+    "@mui/icons-material": "^6.1.2",
+    "@emotion/react": "^11.13.3",
+    "@emotion/styled": "^11.13.0",
+    "@azure/storage-blob": "^12.25.0",
+    "@types/gapi": "^0.0.47",
+    "@types/gapi.client.sheets-v4": "0.0.4",
+    "@types/gapi.client": "^1.0.8"
+    
+    
+  },
+  "devDependencies": {
+    "@babel/plugin-proposal-private-property-in-object": "^7.21.11"
+  },
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
+  }
+}
