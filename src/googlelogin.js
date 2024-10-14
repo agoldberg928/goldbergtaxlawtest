@@ -130,10 +130,6 @@ export function GoogleApiSignin() {
             Sign in to Google
           </Button>
       }
-      
-      
-
-      <Button onClick={() => createGoogleSpreadSheet()}>Do the thing</Button>
     </div>
   )
 }

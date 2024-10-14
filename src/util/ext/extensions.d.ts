@@ -7,7 +7,7 @@ declare global {
         update<K>(key: K, value: V): Map<K, V>
     }
 
-    interface Array {
+    interface Array<T> {
         toMap<K, V>(): Map<K, V>
     }
 

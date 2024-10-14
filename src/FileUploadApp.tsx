@@ -1,16 +1,19 @@
-import React, { IframeHTMLAttributes, useState, ChangeEvent } from 'react';
+import React, { IframeHTMLAttributes, useState, ChangeEvent, useRef } from 'react';
 import { unstable_batchedUpdates } from 'react-dom'
-import { AZURE_STORAGE_WRAPPER } from './client/AzureStorageClientWrapper';
+import { AzureStorageClientWrapper } from './client/AzureStorageClientWrapper';
 import { AnalyzeStage, RunStatus, UploadStatus } from './model/enums';
 import { FileStatusTable } from './react_components/FileUploadTable'
-import { AnalyzeDocumentIntermediateStatus, AZURE_FUNCTION_WRAPPER, DocumentStatus, FinalStatus, WriteCsvSummaryResult } from './client/AzureFunctionClientWrapper';
+import { AnalyzeDocumentIntermediateStatus, AzureFunctionClientWrapper, DocumentStatus, FinalStatus, WriteCsvSummaryResult } from './client/AzureFunctionClientWrapper';
 import "./util/custom_typings/extensions"
 import { LoadingButton } from '@mui/lab';
 import { CloudUpload, OpenInNew, SendAndArchiveOutlined } from '@mui/icons-material';
 import { Box, Button, ButtonGroup } from '@mui/material';
 import { LinearProgressWithLabel, VisuallyHiddenInput } from './react_components/CustomMuiComponents';
 import { createGoogleSpreadSheet } from './googlelogin';
+import { MsalProvider, AuthenticatedTemplate, useMsal, UnauthenticatedTemplate } from '@azure/msal-react';
 import { AnalyzeDocumentsProgressModel } from './react_components/AnalyzeDocumentProgressModal';
+import { IPublicClientApplication } from '@azure/msal-browser';
+import { loginRequest } from './auth/authConfig';
 
 export interface PdfView {
   file: File
@@ -25,11 +28,25 @@ export interface ProcessingStatus {
 export default function FileUploadApp() {
   // map of filename to file
   const [selectedFiles, setSelectedFiles] = useState<Map<string, File>>(new Map<string, File>());
-  const [uploading, setUploading] = useState(false);
   const [processingStatus, setProcessingStatus] = useState<ProcessingStatus | undefined>(undefined);
   const [statementKeys, setStatementKeys] = useState<string[]>([]);
   const [spreadsheetId, setSpreadsheetId] = useState<string | undefined>(undefined)
   const [viewing, setViewing] = useState<PdfView | undefined>(undefined)
+
+  const msal = useMsal()
+  const activeAccount = msal.instance.getActiveAccount();
+
+  const functionWrapperRef = useRef(new AzureFunctionClientWrapper(process.env.REACT_APP_AZURE_FUNCTION_BASE_URL!, msal))
+  const AZURE_FUNCTION_WRAPPER = functionWrapperRef.current
+
+  const storageWrapperRef = useRef(new AzureStorageClientWrapper(AZURE_FUNCTION_WRAPPER, process.env.REACT_APP_STORAGE_ACCOUNT!))
+  const AZURE_STORAGE_WRAPPER = storageWrapperRef.current
+
+  const handleRedirect = () => {
+      // @ts-ignore
+      msal.instance.loginRedirect({...loginRequest, prompt: 'create',})
+          .catch((error) => console.log(error));
+  };
   
 
   const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
@@ -67,7 +84,7 @@ export default function FileUploadApp() {
 
   async function uploadFilesToAzure() {
     const pendingFiles = selectedFiles.filter((_, file)=> file.uploadStatus === UploadStatus.PENDING)
-    if (pendingFiles.size === 0 || uploading) return;
+    if (pendingFiles.size === 0 || processingStatus) return;
 
     const newSelectedFiles = new Map(selectedFiles)
     pendingFiles.forEach((file, filename) => {
@@ -75,19 +92,21 @@ export default function FileUploadApp() {
         newSelectedFiles.set(filename, file)
     })
     unstable_batchedUpdates(() =>{
-      setUploading(true);
+      setProcessingStatus({stage: AnalyzeStage.UPLOADING});
       setSelectedFiles(newSelectedFiles)
     })
 
+    const uploadFailures = new Map<string, any>()
     const promises = pendingFiles.map(async (filename, file) => {
       try {
-        const result = await AZURE_STORAGE_WRAPPER.uploadFile(file);
-        console.log(`${filename} finished uploading with SUCCESS: ${result}`);
+        await AZURE_STORAGE_WRAPPER.uploadFile(file);
+        console.log(`${filename} finished uploading with SUCCESS`);
         file.uploadStatus = UploadStatus.SUCCESS;
         file.statusMessage = undefined;
         setSelectedFiles(selectedFiles.update(filename, file));
       } catch (error: any) {
         console.log(`${filename} finished uploading with FAILED: ${error}`);
+        uploadFailures.set(filename, error)
         file.uploadStatus = UploadStatus.FAILED;
         file.statusMessage = error.message;
         setSelectedFiles(selectedFiles.update(filename, file));
@@ -95,27 +114,38 @@ export default function FileUploadApp() {
     })
 
     await Promise.all(promises).then((values) => {
-      console.log(`Finished uploading all files: ${values}`)
-      setUploading(false);
+      console.log(`Finished uploading all files: ${values}`)  
+      setProcessingStatus({stage: AnalyzeStage.VERIFYING_DOCUMENTS});
     })
 
-    await analyzeDocuments()
-    const csvSummaryFiles = await AZURE_FUNCTION_WRAPPER.writeCsv(statementKeys)
-    const csvFiles = await AZURE_STORAGE_WRAPPER.loadCsvFiles(csvSummaryFiles)
-    setSpreadsheetId(await createGoogleSpreadSheet(csvFiles))
+    if (uploadFailures.size > 0) {
+      alert(uploadFailures.map((filename, error) => `${filename} finished uploading with FAILED: ${error}`))
+      setProcessingStatus(undefined);
+      return
+    }
+
+    const statements = await analyzeDocuments()
+    if (statements.length > 0) {
+      try {
+        const csvSummaryFiles = await AZURE_FUNCTION_WRAPPER.writeCsv(statements)
+        const csvFiles = await AZURE_STORAGE_WRAPPER.loadCsvFiles(csvSummaryFiles)
+        setSpreadsheetId(await createGoogleSpreadSheet(csvFiles))
+      } catch(error) {
+        alert(`Failed to create csv file: ${error}`)
+      }
+    }
+    setProcessingStatus(undefined)
   };
 
-  async function analyzeDocuments() {
-    const uploadedFiles: Map<string, File> = selectedFiles.filter((_, file)=> file.uploadStatus === UploadStatus.SUCCESS)
+  async function analyzeDocuments(): Promise<string[]> {
+    const uploadedFiles: Map<string, File> = selectedFiles.filter((_, file)=> file.uploadStatus === UploadStatus.SUCCESS && file.runStatus != RunStatus.COMPLETED)
     uploadedFiles.forEach((file, _) => {
       file.runStatus = RunStatus.PROCESSING
       file.pagesAnalyzed = undefined
       file.totalPages = undefined
     });
-    unstable_batchedUpdates(() =>{
-      setProcessingStatus({stage: AnalyzeStage.UPLOADING})
-      setSelectedFiles(new Map(selectedFiles))
-    })
+    setSelectedFiles(new Map(selectedFiles))
+    
     try {
       const statements = await AZURE_FUNCTION_WRAPPER.analyzeDocuments([...uploadedFiles.keys()], updateStatus)
       setStatementKeys(statements)
@@ -125,6 +155,7 @@ export default function FileUploadApp() {
         setProcessingStatus({stage: AnalyzeStage.CREATING_CSV})
         setSelectedFiles(new Map(selectedFiles))
       })
+      return statements
     } catch(e: any) {
       console.log(e)
       uploadedFiles.forEach((file, _) => file.runStatus = RunStatus.FAILED);
@@ -132,7 +163,8 @@ export default function FileUploadApp() {
         setProcessingStatus(undefined)
         setSelectedFiles(new Map(selectedFiles))
       })
-      // TODO: pop up an alert
+      alert(`Analyze Documents Failed: ${e}`)
+      return []
     }
   }
 
@@ -147,7 +179,7 @@ export default function FileUploadApp() {
       })
       if (status) {
         unstable_batchedUpdates(() =>{
-          setProcessingStatus({stage: status.action as AnalyzeStage, lastStatus: status})
+          setProcessingStatus({stage: status.stage as AnalyzeStage, lastStatus: status})
           setSelectedFiles(new Map(selectedFiles))
         })
       }
@@ -155,72 +187,87 @@ export default function FileUploadApp() {
 
   return (
     <div>
-      <div>
-        <h2>Analyze Documents</h2>
-        
-        <ButtonGroup variant='contained'>
-          {/* File Input + Label */}
-          <Button
-            color='secondary'
-            disabled={uploading || processingStatus !== undefined}
-            component="label"
-            role={undefined}
-            variant="contained"
-            tabIndex={-1}
-            startIcon={<CloudUpload />}
-          >
-            Select files
-            <VisuallyHiddenInput
-              type="file"
-              onChange={handleFileChange}
-              multiple
-            />
-          </Button>
-
-          <LoadingButton
-            size="large"
-            onClick={uploadFilesToAzure}
-            endIcon={<SendAndArchiveOutlined />}
-            disabled={uploading || selectedFiles.size == 0}
-            loading={uploading}
-            loadingPosition="end"
-            variant="contained"
-          >
-            Analyze
-          </LoadingButton>
-        </ButtonGroup>
-
-        {/* Progress Bar */}
-        <Box>
-          <Box>
-            { processingStatus &&
-              <AnalyzeDocumentsProgressModel open={true} files={selectedFiles} status={processingStatus}/>
-            }
-          </Box>
-          <Box>
-            {spreadsheetId && 
-              <Button variant='contained' size='large' color='primary' endIcon={<OpenInNew />} 
-              href={`https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`} target='_blank'>
-                Open in Google Sheets
-              </Button>
-            }
-          </Box>
-        </Box>
-      </div>
-      <div>
-        {/* Selected Files Table */}
-        <h3>Selected Files</h3>
-        <FileStatusTable files={selectedFiles} handleRemoveClick={handleRemoveClick} handleViewClick={handleViewClick}/>
-
-        {/* PDF Display iFrame */}
-        <div className='pdf-display-container'>
-          {
-            viewing && 
-            <iframe id="pdfDisplay" src={getObjectUrl(viewing)!}/>
-          }
+      <AuthenticatedTemplate>
+        <div>Welcome {activeAccount?.username} <Button onClick={() => msal.instance.logoutRedirect({account: activeAccount, postLogoutRedirectUri: process.env.REACT_APP_AZURE_FUNCTION_BASE_URL})}>Sign out</Button></div>
+        <div>
+          <h2>Analyze Documents</h2>
           
+          <ButtonGroup variant='contained'>
+            {/* File Input + Label */}
+            <Button
+              color='secondary'
+              disabled={processingStatus !== undefined}
+              component="label"
+              role={undefined}
+              variant="contained"
+              tabIndex={-1}
+              startIcon={<CloudUpload />}
+            >
+              Select files
+              <VisuallyHiddenInput
+                type="file"
+                onChange={handleFileChange}
+                multiple
+              />
+            </Button>
+
+            <LoadingButton
+              size="large"
+              onClick={uploadFilesToAzure}
+              endIcon={<SendAndArchiveOutlined />}
+              disabled={processingStatus !== undefined || selectedFiles.size == 0}
+              loading={processingStatus !== undefined}
+              loadingPosition="end"
+              variant="contained"
+            >
+              Analyze
+            </LoadingButton>
+          </ButtonGroup>
+
+          {/* Progress Bar */}
+          <Box>
+            <Box>
+              { processingStatus &&
+                // <AnalyzeDocumentsProgressModel open={true} files={selectedFiles} status={processingStatus}/>
+                <LinearProgressWithLabel value={processingStatus.lastStatus ? (processingStatus.lastStatus?.pagesCompleted / processingStatus.lastStatus?.totalPages * 100) : 0} description={processingStatus.stage ?? processingStatus.lastStatus?.stage}/>
+              }
+            </Box>
+            <Box>
+              {spreadsheetId && 
+                <Button variant='contained' size='large' color='primary' endIcon={<OpenInNew />} 
+                href={`https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`} target='_blank'>
+                  Open in Google Sheets
+                </Button>
+              }
+            </Box>
+          </Box>
         </div>
-      </div>
+        <div>
+          {/* Selected Files Table */}
+          <h3>Selected Files</h3>
+          <FileStatusTable files={selectedFiles} handleRemoveClick={handleRemoveClick} handleViewClick={handleViewClick}/>
+
+          {/* PDF Display iFrame */}
+          <div className='pdf-display-container'>
+            {
+              viewing && 
+              <iframe id="pdfDisplay" src={getObjectUrl(viewing)!}/>
+            }
+            
+          </div>
+        </div>
+      </AuthenticatedTemplate>
+      <UnauthenticatedTemplate>
+          <Button className="signInButton" onClick={handleRedirect} color='primary' variant="contained"> Sign in </Button>
+      </UnauthenticatedTemplate>
     </div>
   );
 };
+
+export function MSalWrapper({instance}: any) {
+  return (
+    <MsalProvider instance={instance}>
+      <FileUploadApp />
+    </MsalProvider>
+  )
+}

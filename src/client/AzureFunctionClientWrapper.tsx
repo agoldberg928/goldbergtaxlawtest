@@ -1,3 +1,6 @@
+import { AccountInfo, IPublicClientApplication } from "@azure/msal-browser"
+import { IMsalContext, useMsal } from "@azure/msal-react";
+import { loginRequest } from "../auth/authConfig";
 import { BlobContainerName } from "../model/enums"
 import { CookieKey, getCookie, setCookie } from "./cookieClient"
 
@@ -5,8 +8,12 @@ export class AzureFunctionClientWrapper {
     private analyzeDocumentEndpoint: string
     private fetchSasTokenEndpoint: string
     private writeCsvSummaryEndpoint: string
+    private instance: IPublicClientApplication
+    private accounts: AccountInfo[]
     
-    constructor(clientEndpoint: string) {
+    constructor(clientEndpoint: string, msalContext: IMsalContext) {
+        this.instance = msalContext.instance
+        this.accounts = msalContext.accounts
         this.analyzeDocumentEndpoint = clientEndpoint.concat(AzureFunctionClientWrapper.ANALYZE_DOCUMENT_ENDPOINT_SUFFIX)
         this.fetchSasTokenEndpoint = clientEndpoint.concat(AzureFunctionClientWrapper.FETCH_SAS_TOKEN_ENDPOINT_SUFFIX)
         this.writeCsvSummaryEndpoint = clientEndpoint.concat(AzureFunctionClientWrapper.WRITE_CSV_SUMMARY_ENDPOINT_SUFFIX)
@@ -18,14 +25,13 @@ export class AzureFunctionClientWrapper {
     }
 
     private async fetchNewSasToken(action: BlobContainerName, cookieKey: CookieKey): Promise<string> {
-        const searchParams = new URLSearchParams({
-            token: "pleasegivemeatoken", // TODO: replace this with some kind of sign in
-            action: action
-        })
+        const searchParams = new URLSearchParams({ action: action })
         
         try {
-            const response = await fetch(`${this.fetchSasTokenEndpoint}?${searchParams}`, { method: "GET" });
-            const token = (await response.json()).token;
+            const response = await this.fetchResponse(`${this.fetchSasTokenEndpoint}?${searchParams}`, { 
+                method: "GET"
+            });
+            const token = response.token;
     
             setCookie(cookieKey, token, AzureFunctionClientWrapper.SAS_TOKEN_EXPIRY_SECONDS);
     
@@ -33,6 +39,7 @@ export class AzureFunctionClientWrapper {
         } catch (error: any) {
             // TODO: what to do if we don't have a SAS token?  Probably should retry/break the page
             console.error("Error fetching the SAS token:", error);
+            alert(`Unable to fetch connection string to Azure Storage: ${error}`)
             throw Error(error.message)
         }
     }
@@ -44,25 +51,21 @@ export class AzureFunctionClientWrapper {
 
     private async initAnalyzeDocuments(filenames: string[]): Promise<string> {
         try {
-            const response = await fetch(this.analyzeDocumentEndpoint, { 
+            const response = await this.fetchResponse(this.analyzeDocumentEndpoint, { 
                 method: "POST",
                 body: JSON.stringify({
                     documents: filenames,
                     overwrite: true
                 })
             });
-            return (await response.json()).statusQueryGetUri;
+            return response.statusQueryGetUri;
         } catch (error: any) {
-            // TODO: Probably should alert with error message
             console.error("Error calling initAnalyzeDocuments:", error);
             throw Error(`initAnalyzeDocuments failed with input [${filenames}]: ${error}`)
         }
-
-        
     }
 
-    async pollForStatus(statusQueryURL: string, pollerFunc: (status: AnalyzeDocumentIntermediateStatus) => void) {
-        // TODO: poll for document status
+    private async pollForStatus(statusQueryURL: string, pollerFunc: (status: AnalyzeDocumentIntermediateStatus) => void) {
         let currentRunningStatus: RuntimeStatus
         let statusInfo: AnalyzeDocumentStatus
         do {
@@ -72,48 +75,39 @@ export class AzureFunctionClientWrapper {
             currentRunningStatus = statusInfo.runtimeStatus
             pollerFunc(statusInfo.customStatus)
             if ((new Date(statusInfo.lastUpdatedTime).valueOf() + AzureFunctionClientWrapper.POLLING_TIMEOUT_PERIOD_MS) < new Date().valueOf()) {
-                const message = `[${statusQueryURL}] Function appears to be stuck as it has not updated in 5 minutes.  Please check the run ID for more details`
-                console.log(message)
-                throw Error(message)
+                throw Error(`[${statusQueryURL}] Function appears to be stuck as it has not updated in 5 minutes.  Please check the run ID for more details`)
             }
-            // TODO: check for last updated time and throw an error message
         } while (currentRunningStatus === RuntimeStatus.RUNNING)
         
         if (statusInfo.runtimeStatus == RuntimeStatus.COMPLETED && statusInfo.output.status == FinalStatus.SUCCESS) {
             return statusInfo.output.result
         } else if (statusInfo.runtimeStatus == RuntimeStatus.COMPLETED && statusInfo.output.status == FinalStatus.FAILED) {
-            const message = `[${statusQueryURL}] Analyze Document function return FAILED status: ${statusInfo.output.errorMessage}`
-            console.log(message)
-            throw Error(message)
+            throw Error(`[${statusQueryURL}] Analyze Document process return FAILED status: ${statusInfo.output.errorMessage}`)
         } else {
-            const message = `[${statusQueryURL}] Analyze Document function failed to complete.  Please check the runId for more details. Last known status: ${JSON.stringify(statusInfo)}.`
-            console.log(message)
-            throw Error(message)
+            throw Error(`[${statusQueryURL}] Analyze Document process failed to complete.  Please check the runId for more details. Last known status: ${JSON.stringify(statusInfo)}.`)
         }
     }
 
-    async getAnalyzeDocumentStatus(statusQueryUrl: string): Promise<AnalyzeDocumentStatus> {
+    private async getAnalyzeDocumentStatus(statusQueryUrl: string): Promise<AnalyzeDocumentStatus> {
         try {
-            const response = await fetch(statusQueryUrl, { method: "GET"});
-            
-            return await response.json()
+            const response = await this.fetchResponse(statusQueryUrl, { method: "GET" });
+            return response
         } catch(err: any) {
-            // TODO: what to do if this fails? Should probably return a default failure object/retry
-            console.error(err)
-            throw Error(`[${statusQueryUrl}] GetAnalyzeDocumentStatus failed: ${err}`)
+            // TODO: what to do if this fails? Should probably implement limited retry to persist through network failures, etc.
+            throw Error(`[${statusQueryUrl}] Call to get status of analyze documents process failed: ${err}`)
         }
     }
 
     async writeCsv(statements: string[]): Promise<WriteCsvSummaryResult> {
         try {
-            const response = await fetch(this.writeCsvSummaryEndpoint, { 
+            const response = await this.fetchResponse(this.writeCsvSummaryEndpoint, { 
                 method: "POST",
                 body: JSON.stringify({
                     statementKeys: statements,
                     outputDirectory: "reacttest",
                 })
             });
-            const result = await response.json() as WriteCsvSummaryResult
+            const result = response as WriteCsvSummaryResult
             if (result.status == FinalStatus.SUCCESS) {
                 return result;
             } else {
@@ -127,12 +121,35 @@ export class AzureFunctionClientWrapper {
     }
 
 
+    private async fetchResponse(url: string, requestParams: RequestInit | undefined): Promise<any> {
+        const header = await this.getValidAuthHeader()
+        const response = await fetch(url, { 
+            ...requestParams,
+            headers: header
+        });
+        const blobText = await (await response.blob()).text()
+        if (blobText.length == 0) {
+            throw Error(`[${response.url}] failed with status ${response.status}: ${response.statusText}`)
+        }
+        try {
+            return JSON.parse(blobText)
+        } catch(err: any) {
+            throw Error(blobText)
+        }
+    }
 
-    
+    private async getValidAuthHeader(): Promise<HeadersInit> {
+        // @ts-ignore
+        const authResponse = await this.instance.acquireTokenSilent({...loginRequest, account: this.accounts[0]})
+        return {
+            Authorization: `Bearer ${authResponse.accessToken}`, // Attach the token
+            'Content-Type': 'application/json'
+        }
+    }
 
     private static ANALYZE_DOCUMENT_ENDPOINT_SUFFIX = "/api/InitAnalyzeDocuments"
     private static FETCH_SAS_TOKEN_ENDPOINT_SUFFIX = "/api/RequestSASToken"
-    private static WRITE_CSV_SUMMARY_ENDPOINT_SUFFIX = "/api/WriteCsvSummaryFunction"
+    private static WRITE_CSV_SUMMARY_ENDPOINT_SUFFIX = "/api/WriteCsvSummary"
     
     private static SAS_TOKEN_EXPIRY_SECONDS = 60 * 15  // 15 minutes
     private static POLLING_TIMEOUT_PERIOD_MS = 1000 * 60 * 2  // 2 minutes
@@ -158,7 +175,7 @@ type AnalyzeDocumentStatus = {
 }
 
 export type AnalyzeDocumentIntermediateStatus = {
-    action: string
+    stage: string
     documents: Array<DocumentStatus>
     totalPages: number
     pagesCompleted: number
@@ -199,5 +216,3 @@ export interface WriteCsvSummaryResult {
 function wait(ms: number = 1000) {
     return new Promise(resolve => { setTimeout(resolve, ms); });
 };
-
-export const AZURE_FUNCTION_WRAPPER = new AzureFunctionClientWrapper(process.env.REACT_APP_AZURE_FUNCTION_BASE_URL!)

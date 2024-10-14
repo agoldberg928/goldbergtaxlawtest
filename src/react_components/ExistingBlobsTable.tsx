@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { AZURE_STORAGE_WRAPPER } from '../client/AzureStorageClientWrapper';
 import { BlobItem } from '@azure/storage-blob';
 import '../util/ext/extensions'
+import { AzureStorageClientWrapper } from '../client/AzureStorageClientWrapper';
 
 
 interface ExistingTableRowProps {
@@ -21,7 +21,7 @@ function ExistingBlobsTableRow({blobname, blob}: ExistingTableRowProps) {
     )
 }
   
-function ExistingBlobsTable() {
+function ExistingBlobsTable(AZURE_STORAGE_WRAPPER: AzureStorageClientWrapper) {
     const [existingFiles, setExistingFiles] = useState<Map<string, BlobItem>>(new Map<string, BlobItem>());
     
     function loadFiles() {

@@ -1,30 +1,32 @@
 import { BlobUploadCommonResponse, ContainerClient, BlobItem } from "@azure/storage-blob";
-import { AZURE_FUNCTION_WRAPPER, AzureFunctionClientWrapper, WriteCsvSummaryResult } from "./AzureFunctionClientWrapper";
+import { AzureFunctionClientWrapper, WriteCsvSummaryResult } from "./AzureFunctionClientWrapper";
 import { CookieKey, getCookie } from "./cookieClient";
 import { BlobContainerName } from "../model/enums";
 import { BankStatement } from "../model/statement_model";
 
 
-class AzureStorageClientWrapper {
+export class AzureStorageClientWrapper {
     private azureFunctionWrapper: AzureFunctionClientWrapper
-    private inputContainerClient: Promise<ContainerClient>
-    private outputContainerClient: Promise<ContainerClient>
+    private inputContainerClient: Promise<ContainerClient> | undefined
+    private outputContainerClient: Promise<ContainerClient> | undefined
     private storageAccountName: string
     constructor(functionWrapper: AzureFunctionClientWrapper, storageAccountName: string) {
         this.storageAccountName = storageAccountName
         this.azureFunctionWrapper = functionWrapper
-        this.inputContainerClient = this.newClientFromSasToken(BlobContainerName.INPUT)
-        this.outputContainerClient = this.newClientFromSasToken(BlobContainerName.OUTPUT)
+        // this.inputContainerClient = this.newClientFromSasToken(BlobContainerName.INPUT)
+        // this.outputContainerClient = this.newClientFromSasToken(BlobContainerName.OUTPUT)
+        this.inputContainerClient = undefined
+        this.outputContainerClient = undefined
     }
 
     private async getInputClient(): Promise<ContainerClient> {
-        if (getCookie(CookieKey.INPUT_SAS_TOKEN)) return this.inputContainerClient
+        if (getCookie(CookieKey.INPUT_SAS_TOKEN) && this.inputContainerClient) return this.inputContainerClient
         else return this.refreshInputClient()
     }
     
     
     private async getOutputClient(): Promise<ContainerClient> {
-        if (getCookie(CookieKey.INPUT_SAS_TOKEN)) return this.outputContainerClient
+        if (getCookie(CookieKey.INPUT_SAS_TOKEN) && this.outputContainerClient) return this.outputContainerClient
         else return this.refreshOutputClient()
     }
 
@@ -92,5 +94,3 @@ export interface CsvSummary {
     statementSummary: string,
     records: string,
 }
-
-export const AZURE_STORAGE_WRAPPER = new AzureStorageClientWrapper(AZURE_FUNCTION_WRAPPER, process.env.REACT_APP_STORAGE_ACCOUNT!)

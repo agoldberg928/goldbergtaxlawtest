@@ -1,5 +1,5 @@
 import "../custom_typings/extensions"
-import { UploadStatus } from "../../model/enums"
+import { RunStatus, UploadStatus } from "../../model/enums"
 
 // Map.prototype.add = function<K, V>(key: K, value: V) {
 //     return new Map([...this].concat(Array([key, value])))
@@ -46,3 +46,4 @@ FileList.prototype.forEach = function(func: (file: File, idx: number) => void) {
 // }
 
 File.prototype.uploadStatus = UploadStatus.PENDING
+File.prototype.runStatus = undefined

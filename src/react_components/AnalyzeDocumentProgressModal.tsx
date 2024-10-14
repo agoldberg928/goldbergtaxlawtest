@@ -5,6 +5,7 @@ import React from "react";
 import { AnalyzeDocumentIntermediateStatus } from "../client/AzureFunctionClientWrapper";
 import { AnalyzeStage } from "../model/enums";
 import { LinearProgressWithLabel } from "./CustomMuiComponents";
+import '../util/ext/extensions'
 
 export interface ProgressModalProps {
     open: boolean
