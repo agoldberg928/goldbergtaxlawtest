@@ -1,7 +1,7 @@
 {
   "name": "analyze-bank-documents.dev",
   "version": "1.0.0",
-  "homepage": "https://agoldberg928.github.io/goldbergtaxlawtest",
+  "homepage": "http://localhost:3000",
   "main": "/src/index.js",
   "scripts": {
     "predeploytest": "env-cmd -f .env.test npm run build",
@@ -36,10 +36,11 @@
     "@azure/msal-browser": "^3.26.0",
     "@azure/msal-react": "^2.1.1",
     "@types/gapi": "^0.0.47",
+    "@types/google.accounts": "^0.0.15",
+    "@types/google.azure": "",
     "@types/gapi.client.sheets-v4": "0.0.4",
-    "@types/gapi.client": "^1.0.8"
-    
-    
+    "@types/gapi.client": "^1.0.8",
+    "jwt-decode": "^4.0.0"
   },
   "devDependencies": {
     "@babel/plugin-proposal-private-property-in-object": "^7.21.11",
