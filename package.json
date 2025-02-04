@@ -1,7 +1,7 @@
 {
   "name": "analyze-bank-documents.dev",
   "version": "1.0.0",
-  "homepage": "http://localhost:3000",
+  "homepage": "https://agoldberg928.github.io/goldbergtaxlawtest",
   "main": "/src/index.js",
   "scripts": {
     "predeploytest": "env-cmd -f .env.test npm run build",
